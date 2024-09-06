@@ -1,18 +1,26 @@
 import boto3
 import json
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import defaultdict
 
-# Initialize IAM client for the specific region (us-east-1)
+# Initialize IAM and CloudTrail clients for the specific region (us-east-1)
 region_name = 'us-east-1'
 iam_client = boto3.client('iam', region_name=region_name)
+cloudtrail_client = boto3.client('cloudtrail', region_name=region_name)
 
 # Actions to search for in policies
 target_actions = ["ec2:CreateVolume", "ec2:CopySnapshot"]
 
+# List of unsupported condition keys for CreateVolume and CopySnapshot actions
+unsupported_condition_keys = [
+    "ec2:ProductCode", "ec2:Encrypted", "ec2:VolumeSize", 
+    "ec2:ParentSnapshot", "ec2:Owner", "ec2:ParentVolume", 
+    "ec2:SnapshotTime"
+]
+
 def get_all_aws_job_function_policies():
-    """Retrieve all AWS-managed job function IAM policies in the AWS account, filtering for relevant policies."""
-    print("\033[92mLoading AWS-managed job function IAM policies...\033[0m")
+    """Retrieve all AWS job function-managed IAM policies in the AWS account, filtering for relevant policies."""
+    print("\033[92mLoading AWS job function-managed IAM policies...\033[0m")  
     paginator = iam_client.get_paginator('list_policies')
     policy_iterator = paginator.paginate(Scope='AWS')
     policies = []
@@ -21,7 +29,6 @@ def get_all_aws_job_function_policies():
         for policy in page['Policies']:
             # Filter for AWS job function policies by checking if they contain 'job-function' in the ARN
             if 'job-function' in policy['Arn']:
-                # Only include policies that are relevant to the target actions
                 policy_arn = policy['Arn']
                 default_version_id = policy['DefaultVersionId']
                 policy_document = get_policy_version(policy_arn, default_version_id)
@@ -29,19 +36,18 @@ def get_all_aws_job_function_policies():
                     policies.append(policy)
                     print(f"Found relevant job function policy: {policy['PolicyName']}")
 
-    print(f"Total relevant AWS-managed job function policies found: {len(policies)}")
+    print(f"Total relevant AWS job function-managed policies found: {len(policies)}")
+    print("-" * 60)
     return policies
 
 def normalize_actions(actions):
-    """
-    Normalize actions to a list format.
-    """
+    """Normalize actions to a list format."""
     if isinstance(actions, str):
-        return [actions] 
+        return [actions]
     elif isinstance(actions, list):
         return actions
     else:
-        return []  # If it's neither a string nor a list, return an empty list
+        return []
 
 def contains_target_actions(policy_document):
     """Check if the policy document contains the target actions (ec2:CreateVolume, ec2:CopySnapshot)."""
@@ -68,68 +74,126 @@ def get_policy_version(policy_arn, version_id):
     )
     return response['PolicyVersion']['Document']
 
-def get_users_with_policy(policy_arn):
-    """Retrieve all users who have a specific AWS-managed job function policy attached."""
-    print(f"Searching for users with job function policy: {policy_arn}")
-    users = []
+def query_cloudtrail_logs():
+    """Query CloudTrail logs for unsupported condition keys in specific API calls."""
+    print("\033[92mSearching CloudTrail logs for unsupported condition keys...\033[0m")  
     try:
-        response = iam_client.list_entities_for_policy(PolicyArn=policy_arn, EntityFilter='User')
-        users = [user['UserName'] for user in response['PolicyUsers']]
-        print(f"Found {len(users)} users with policy: {policy_arn}")
-    except Exception as e:
-        print(f"Error retrieving users for policy {policy_arn}: {str(e)}")
-    return users
-
-def output_policies_with_target_actions_and_users():
-    """Find and display AWS-managed job function IAM policies with target actions and associated users."""
-    policies = get_all_aws_job_function_policies()
-    policies_with_target_actions = []
-
-    print("\033[92mProcessing AWS-managed job function policies to find users...\033[0m")
-    # Use threading to process policies concurrently
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {executor.submit(process_policy, policy): policy for policy in policies}
+        # Lookup events for CreateVolume and CopySnapshot actions
+        response = cloudtrail_client.lookup_events(
+            LookupAttributes=[
+                {'AttributeKey': 'EventName', 'AttributeValue': 'CreateVolume'},
+                {'AttributeKey': 'EventName', 'AttributeValue': 'CopySnapshot'}
+            ],
+            MaxResults=1000
+        )
         
-        for future in as_completed(futures):
-            policy = futures[future]
-            try:
-                result = future.result()
-                if result:
-                    policies_with_target_actions.append(result)
-            except Exception as e:
-                print(f"Error processing policy {policy['PolicyName']}: {str(e)}")
-
-    # Output the policies with target actions and associated users
-    if policies_with_target_actions:
-        print("AWS-managed job function policies containing target actions and associated users:")
-        for policy in policies_with_target_actions:
-            print(f"Policy Name: {policy['PolicyName']}")
-            print(f"Policy ARN: {policy['PolicyArn']}")
+        events = response['Events']
+        unsupported_events = []
+        
+        for event in events:
+            event_details = json.loads(event['CloudTrailEvent'])
+            request_parameters = event_details.get('requestParameters', {})
             
-            # Find users with this managed policy attached
-            users = get_users_with_policy(policy['PolicyArn'])
-            if users:
-                print(f"Users with this policy: {', '.join(users)}")
+            # Check for unsupported condition keys in the request parameters
+            for key in unsupported_condition_keys:
+                if key in request_parameters:
+                    # Check if the event succeeded or failed
+                    if 'errorCode' in event_details:
+                        status = 'Failed'
+                        error_message = event_details['errorCode']
+                    else:
+                        status = 'Succeeded'
+                        error_message = 'None'
+                    
+                    unsupported_events.append({
+                        'EventId': event['EventId'],
+                        'EventName': event['EventName'],
+                        'User': event_details['userIdentity'].get('arn', 'Unknown'),
+                        'UnsupportedCondition': key,
+                        'EventTime': event['EventTime'],
+                        'Status': status,
+                        'ErrorMessage': error_message
+                    })
+
+        # Output the CloudTrail events with unsupported condition keys
+        if unsupported_events:
+            print("CloudTrail events with unsupported condition keys found:")
+            for event in unsupported_events:
+                print(f"Event ID: {event['EventId']}")
+                print(f"Event Name: {event['EventName']}")
+                print(f"User: {event['User']}")
+                print(f"Unsupported Condition: {event['UnsupportedCondition']}")
+                print(f"Event Time: {event['EventTime']}")
+                print(f"Status: {event['Status']}")
+                print(f"Error Message: {event['ErrorMessage']}")
+                print("-" * 60)
+        else:
+            print("No CloudTrail events with unsupported condition keys found.")
+            print("-" * 60)
+
+    except Exception as e:
+        print(f"Error querying CloudTrail logs: {str(e)}")
+        print("-" * 60)
+
+def get_users_with_policies(policies):
+    """Retrieve all users who have any of the specific policies attached, along with their groups."""
+    user_policies_map = defaultdict(lambda: {'policies': [], 'groups': []})
+
+    for policy in policies:
+        policy_arn = policy['Arn']
+        try:
+            response = iam_client.list_entities_for_policy(PolicyArn=policy_arn, EntityFilter='User')
+            users = [user['UserName'] for user in response['PolicyUsers']]
+            for user in users:
+                user_policies_map[user]['policies'].append(policy['PolicyName'])
+                # Get groups for each user
+                groups = get_groups_for_user(user)
+                user_policies_map[user]['groups'] = groups
+        except Exception as e:
+            print(f"Error retrieving users for policy {policy_arn}: {str(e)}")
+            print("-" * 60)
+
+    return user_policies_map
+
+def get_groups_for_user(user_name):
+    """Retrieve groups for a specific user."""
+    groups = []
+    try:
+        response = iam_client.list_groups_for_user(UserName=user_name)
+        groups = [group['GroupName'] for group in response['Groups']]
+    except Exception as e:
+        print(f"Error retrieving groups for user {user_name}: {str(e)}")
+        print("-" * 60)
+    return groups
+
+def output_users_with_policies(user_policies_map):
+    """Display users with policies containing unsupported keys and their groups."""
+    print("\033[92mProcessing AWS job function-managed policies to find users...\033[0m")  
+
+    # Output the users with policies containing target actions
+    if user_policies_map:
+        print("Users with AWS job function-managed policies containing target actions:")
+        for user, info in user_policies_map.items():
+            print(f"User: {user}")
+            print(f"Number of Policies: {len(info['policies'])}")
+            print(f"Policy Names: {', '.join(info['policies'])}")
+            print(f"Groups: {', '.join(info['groups']) if info['groups'] else 'None'}")
             print("-" * 60)
     else:
-        print("No AWS-managed job function policies found with target actions.")
-
-def process_policy(policy):
-    """Process each policy to check for target actions."""
-    policy_arn = policy['Arn']
-    default_version_id = policy['DefaultVersionId']
-    policy_document = get_policy_version(policy_arn, default_version_id)
-
-    # Check for target actions
-    if contains_target_actions(policy_document):
-        return {
-            'PolicyName': policy['PolicyName'],
-            'PolicyArn': policy_arn
-        }
-    return None
+        print("No users found with AWS job function-managed policies containing target actions.")
+        print("-" * 60)
 
 if __name__ == "__main__":
-    # Output AWS-managed job function IAM policies with target actions and associated users
-    print("\033[92mStarting search for AWS-managed job function IAM policies with target actions...\033[0m")  
-    output_policies_with_target_actions_and_users()
-    print("\033[92mSearch completed.\033[0m") 
+    # Output AWS job function-managed IAM policies with target actions
+    print("\033[92mStarting search for AWS job function-managed IAM policies with target actions...\033[0m")  
+    policies = get_all_aws_job_function_policies()
+    
+    # Search CloudTrail logs for events with unsupported condition keys
+    query_cloudtrail_logs()
+
+    # Output users with policies containing unsupported keys
+    user_policies_map = get_users_with_policies(policies)
+    output_users_with_policies(user_policies_map)
+    
+    print("\033[92mSearch completed!\033[0m")  
+    print("-" * 60)
