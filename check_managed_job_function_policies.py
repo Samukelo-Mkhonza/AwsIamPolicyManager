@@ -3,32 +3,33 @@ import json
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Initialize IAM client and CloudTrail client for the specific region (us-east-1)
+# Initialize IAM client for the specific region (us-east-1)
 region_name = 'us-east-1'
 iam_client = boto3.client('iam', region_name=region_name)
-cloudtrail_client = boto3.client('cloudtrail', region_name=region_name)
 
 # Actions to search for in policies
 target_actions = ["ec2:CreateVolume", "ec2:CopySnapshot"]
 
-def get_all_managed_policies():
-    """Retrieve all managed IAM policies in the AWS account, filtering for relevant policies."""
-    print("Loading managed IAM policies...")
+def get_all_aws_job_function_policies():
+    """Retrieve all AWS-managed job function IAM policies in the AWS account, filtering for relevant policies."""
+    print("\033[92mLoading AWS-managed job function IAM policies...\033[0m")
     paginator = iam_client.get_paginator('list_policies')
-    policy_iterator = paginator.paginate(Scope='All')  # Include both AWS-managed and customer-managed policies
+    policy_iterator = paginator.paginate(Scope='AWS')  # 'AWS' includes only AWS-managed policies
     policies = []
 
     for page in policy_iterator:
         for policy in page['Policies']:
-            # Only include policies that are relevant to the target actions
-            policy_arn = policy['Arn']
-            default_version_id = policy['DefaultVersionId']
-            policy_document = get_policy_version(policy_arn, default_version_id)
-            if contains_target_actions(policy_document):
-                policies.append(policy)
-                print(f"Found relevant policy: {policy['PolicyName']}")
+            # Filter for AWS job function policies by checking if they contain 'job-function' in the ARN
+            if 'job-function' in policy['Arn']:
+                # Only include policies that are relevant to the target actions
+                policy_arn = policy['Arn']
+                default_version_id = policy['DefaultVersionId']
+                policy_document = get_policy_version(policy_arn, default_version_id)
+                if contains_target_actions(policy_document):
+                    policies.append(policy)
+                    print(f"Found relevant job function policy: {policy['PolicyName']}")
 
-    print(f"Total relevant managed policies found: {len(policies)}")
+    print(f"Total relevant AWS-managed job function policies found: {len(policies)}")
     return policies
 
 def normalize_actions(actions):
@@ -45,7 +46,6 @@ def normalize_actions(actions):
 def contains_target_actions(policy_document):
     """Check if the policy document contains the target actions (ec2:CreateVolume, ec2:CopySnapshot)."""
     for statement in policy_document.get('Statement', []):
-        # Ensure 'statement' is a dictionary
         if isinstance(statement, dict):
             actions = statement.get('Action', [])
             actions = normalize_actions(actions)
@@ -58,26 +58,7 @@ def contains_target_actions(policy_document):
             # Check if any of the target actions are in the policy's actions
             if any(action in target_actions for action in actions):
                 return True
-        elif isinstance(statement, str) or isinstance(statement, list):
-            # Skip known valid formats like strings or lists
-            continue
-        else:
-            # Print debug information only for truly unexpected formats
-            print(f"Unexpected format in policy statement: {statement}")
     return False
-
-def convert_datetime_to_string(obj):
-    """
-    Helper function to convert datetime objects to strings within a dictionary.
-    """
-    if isinstance(obj, dict):
-        return {k: convert_datetime_to_string(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_datetime_to_string(element) for element in obj]
-    elif isinstance(obj, datetime):
-        return obj.isoformat()  # Convert datetime to ISO format string
-    else:
-        return obj
 
 def get_policy_version(policy_arn, version_id):
     """Retrieve the policy document for a specific version of an IAM policy."""
@@ -88,8 +69,8 @@ def get_policy_version(policy_arn, version_id):
     return response['PolicyVersion']['Document']
 
 def get_users_with_policy(policy_arn):
-    """Retrieve all users who have a specific managed policy attached."""
-    print(f"Searching for users with policy: {policy_arn}")
+    """Retrieve all users who have a specific AWS-managed job function policy attached."""
+    print(f"Searching for users with job function policy: {policy_arn}")
     users = []
     try:
         response = iam_client.list_entities_for_policy(PolicyArn=policy_arn, EntityFilter='User')
@@ -99,32 +80,12 @@ def get_users_with_policy(policy_arn):
         print(f"Error retrieving users for policy {policy_arn}: {str(e)}")
     return users
 
-def check_user_inline_policies(user_name):
-    """Check inline policies for a specific user for the target actions."""
-    print(f"Checking inline policies for user: {user_name}")
-    try:
-        response = iam_client.list_user_policies(UserName=user_name)
-        inline_policies = response['PolicyNames']
-
-        for policy_name in inline_policies:
-            policy_document = iam_client.get_user_policy(UserName=user_name, PolicyName=policy_name)['PolicyDocument']
-            if contains_target_actions(policy_document):
-                print(f"Found inline policy with target actions for user: {user_name}")
-                return {
-                    'UserName': user_name,
-                    'InlinePolicyName': policy_name,
-                    'Actions': target_actions
-                }
-    except Exception as e:
-        print(f"Error retrieving inline policies for user {user_name}: {str(e)}")
-    return None
-
 def output_policies_with_target_actions_and_users():
-    """Find and display IAM policies with target actions and associated users."""
-    policies = get_all_managed_policies()
+    """Find and display AWS-managed job function IAM policies with target actions and associated users."""
+    policies = get_all_aws_job_function_policies()
     policies_with_target_actions = []
 
-    print("Processing policies to find users...")
+    print("\033[92mProcessing AWS-managed job function policies to find users...\033[0m")
     # Use threading to process policies concurrently
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = {executor.submit(process_policy, policy): policy for policy in policies}
@@ -140,7 +101,7 @@ def output_policies_with_target_actions_and_users():
 
     # Output the policies with target actions and associated users
     if policies_with_target_actions:
-        print("Policies containing target actions and associated users:")
+        print("AWS-managed job function policies containing target actions and associated users:")
         for policy in policies_with_target_actions:
             print(f"Policy Name: {policy['PolicyName']}")
             print(f"Policy ARN: {policy['PolicyArn']}")
@@ -149,16 +110,9 @@ def output_policies_with_target_actions_and_users():
             users = get_users_with_policy(policy['PolicyArn'])
             if users:
                 print(f"Users with this policy: {', '.join(users)}")
-            
-            # Check for inline policies for each user
-            for user in users:
-                user_inline_policy = check_user_inline_policies(user)
-                if user_inline_policy:
-                    print(f"User '{user}' has inline policy '{user_inline_policy['InlinePolicyName']}' with target actions: {', '.join(user_inline_policy['Actions'])}")
-            
             print("-" * 60)
     else:
-        print("No policies found with target actions.")
+        print("No AWS-managed job function policies found with target actions.")
 
 def process_policy(policy):
     """Process each policy to check for target actions."""
@@ -175,7 +129,7 @@ def process_policy(policy):
     return None
 
 if __name__ == "__main__":
-    # Output IAM policies with target actions and associated users
-    print("Starting search for IAM policies with target actions...")
+    # Output AWS-managed job function IAM policies with target actions and associated users
+    print("\033[92mStarting search for AWS-managed job function IAM policies with target actions...\033[0m")  # Green text
     output_policies_with_target_actions_and_users()
-    print("Search completed.")
+    print("\033[92mSearch completed.\033[0m") 
