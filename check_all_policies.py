@@ -36,11 +36,11 @@ def normalize_actions(actions):
     Normalize actions to a list format.
     """
     if isinstance(actions, str):
-        return [actions]  # Convert single string to a list
+        return [actions]
     elif isinstance(actions, list):
-        return actions  # Already a list
+        return actions
     else:
-        return []  # If it's neither a string nor a list, return an empty list
+        return []
 
 def contains_target_actions(policy_document):
     """Check if the policy document contains the target actions (ec2:CreateVolume, ec2:CopySnapshot)."""
@@ -75,7 +75,7 @@ def convert_datetime_to_string(obj):
     elif isinstance(obj, list):
         return [convert_datetime_to_string(element) for element in obj]
     elif isinstance(obj, datetime):
-        return obj.isoformat()  # Convert datetime to ISO format string
+        return obj.isoformat()
     else:
         return obj
 

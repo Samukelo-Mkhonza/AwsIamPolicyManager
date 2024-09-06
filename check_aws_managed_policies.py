@@ -13,9 +13,9 @@ target_actions = ["ec2:CreateVolume", "ec2:CopySnapshot"]
 
 def get_all_aws_managed_policies():
     """Retrieve all AWS-managed IAM policies in the AWS account, filtering for relevant policies."""
-    print("\033[92mLoading AWS-managed IAM policies...\033[0m")  # Green text
+    print("\033[92mLoading AWS-managed IAM policies...\033[0m")  
     paginator = iam_client.get_paginator('list_policies')
-    policy_iterator = paginator.paginate(Scope='AWS')  # 'AWS' includes only AWS-managed policies
+    policy_iterator = paginator.paginate(Scope='AWS')
     policies = []
 
     for page in policy_iterator:
@@ -69,7 +69,7 @@ def get_policy_version(policy_arn, version_id):
 
 def get_users_with_policies(policies):
     """Retrieve all users who have any of the specific policies attached, along with their groups."""
-    user_policies_map = defaultdict(lambda: {'policies': [], 'groups': []})  # Dictionary to store users, their associated policies, and groups
+    user_policies_map = defaultdict(lambda: {'policies': [], 'groups': []}) 
 
     for policy in policies:
         policy_arn = policy['Arn']
@@ -101,7 +101,7 @@ def output_policies_with_target_actions_and_users():
     policies = get_all_aws_managed_policies()
     user_policies_map = get_users_with_policies(policies)
 
-    print("\033[92mProcessing AWS-managed policies to find users...\033[0m")  # Green text
+    print("\033[92mProcessing AWS-managed policies to find users...\033[0m")  
 
     # Output the users with policies containing target actions
     if user_policies_map:
@@ -117,6 +117,6 @@ def output_policies_with_target_actions_and_users():
 
 if __name__ == "__main__":
     # Output AWS-managed IAM policies with target actions and associated users
-    print("\033[92mStarting search for AWS-managed IAM policies with target actions...\033[0m")  # Green text
+    print("\033[92mStarting search for AWS-managed IAM policies with target actions...\033[0m")  
     output_policies_with_target_actions_and_users()
-    print("\033[92mSearch completed.\033[0m")  # Green text
+    print("\033[92mSearch completed.\033[0m")  

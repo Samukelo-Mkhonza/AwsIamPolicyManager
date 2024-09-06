@@ -14,7 +14,7 @@ def get_all_aws_job_function_policies():
     """Retrieve all AWS-managed job function IAM policies in the AWS account, filtering for relevant policies."""
     print("\033[92mLoading AWS-managed job function IAM policies...\033[0m")
     paginator = iam_client.get_paginator('list_policies')
-    policy_iterator = paginator.paginate(Scope='AWS')  # 'AWS' includes only AWS-managed policies
+    policy_iterator = paginator.paginate(Scope='AWS')
     policies = []
 
     for page in policy_iterator:
@@ -37,9 +37,9 @@ def normalize_actions(actions):
     Normalize actions to a list format.
     """
     if isinstance(actions, str):
-        return [actions]  # Convert single string to a list
+        return [actions] 
     elif isinstance(actions, list):
-        return actions  # Already a list
+        return actions
     else:
         return []  # If it's neither a string nor a list, return an empty list
 
@@ -130,6 +130,6 @@ def process_policy(policy):
 
 if __name__ == "__main__":
     # Output AWS-managed job function IAM policies with target actions and associated users
-    print("\033[92mStarting search for AWS-managed job function IAM policies with target actions...\033[0m")  # Green text
+    print("\033[92mStarting search for AWS-managed job function IAM policies with target actions...\033[0m")  
     output_policies_with_target_actions_and_users()
     print("\033[92mSearch completed.\033[0m") 

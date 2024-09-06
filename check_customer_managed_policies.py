@@ -15,7 +15,7 @@ def get_all_customer_managed_policies():
     """Retrieve all customer-managed IAM policies in the AWS account, filtering for relevant policies."""
     print("\033[92mLoading customer-managed IAM policies...\033[0m")  
     paginator = iam_client.get_paginator('list_policies')
-    policy_iterator = paginator.paginate(Scope='Local')  # 'Local' includes only customer-managed policies
+    policy_iterator = paginator.paginate(Scope='Local')
     policies = []
 
     for page in policy_iterator:
@@ -36,11 +36,11 @@ def normalize_actions(actions):
     Normalize actions to a list format.
     """
     if isinstance(actions, str):
-        return [actions]  # Convert single string to a list
+        return [actions]
     elif isinstance(actions, list):
-        return actions  # Already a list
+        return actions
     else:
-        return []  # If it's neither a string nor a list, return an empty list
+        return []
 
 def contains_target_actions(policy_document):
     """Check if the policy document contains the target actions (ec2:CreateVolume, ec2:CopySnapshot)."""
@@ -69,7 +69,7 @@ def get_policy_version(policy_arn, version_id):
 
 def get_users_with_policies(policies):
     """Retrieve all users who have any of the specific policies attached, along with their groups."""
-    user_policies_map = defaultdict(lambda: {'policies': [], 'groups': []})  # Dictionary to store users, their associated policies, and groups
+    user_policies_map = defaultdict(lambda: {'policies': [], 'groups': []})
 
     for policy in policies:
         policy_arn = policy['Arn']
