@@ -2,6 +2,7 @@ import boto3
 import json
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import defaultdict
 
 # Initialize IAM client for the specific region (us-east-1)
 region_name = 'us-east-1'
@@ -66,65 +67,53 @@ def get_policy_version(policy_arn, version_id):
     )
     return response['PolicyVersion']['Document']
 
-def get_users_with_policy(policy_arn):
-    """Retrieve all users who have a specific customer-managed policy attached."""
-    print(f"Searching for users with policy: {policy_arn}")
-    users = []
+def get_users_with_policies(policies):
+    """Retrieve all users who have any of the specific policies attached, along with their groups."""
+    user_policies_map = defaultdict(lambda: {'policies': [], 'groups': []})  # Dictionary to store users, their associated policies, and groups
+
+    for policy in policies:
+        policy_arn = policy['Arn']
+        try:
+            response = iam_client.list_entities_for_policy(PolicyArn=policy_arn, EntityFilter='User')
+            users = [user['UserName'] for user in response['PolicyUsers']]
+            for user in users:
+                user_policies_map[user]['policies'].append(policy['PolicyName'])
+                # Get groups for each user
+                groups = get_groups_for_user(user)
+                user_policies_map[user]['groups'] = groups
+        except Exception as e:
+            print(f"Error retrieving users for policy {policy_arn}: {str(e)}")
+
+    return user_policies_map
+
+def get_groups_for_user(user_name):
+    """Retrieve groups for a specific user."""
+    groups = []
     try:
-        response = iam_client.list_entities_for_policy(PolicyArn=policy_arn, EntityFilter='User')
-        users = [user['UserName'] for user in response['PolicyUsers']]
-        print(f"Found {len(users)} users with policy: {policy_arn}")
+        response = iam_client.list_groups_for_user(UserName=user_name)
+        groups = [group['GroupName'] for group in response['Groups']]
     except Exception as e:
-        print(f"Error retrieving users for policy {policy_arn}: {str(e)}")
-    return users
+        print(f"Error retrieving groups for user {user_name}: {str(e)}")
+    return groups
 
 def output_policies_with_target_actions_and_users():
     """Find and display customer-managed IAM policies with target actions and associated users."""
     policies = get_all_customer_managed_policies()
-    policies_with_target_actions = []
+    user_policies_map = get_users_with_policies(policies)
 
     print("\033[92mProcessing customer-managed policies to find users...\033[0m")  
-    # Use threading to process policies concurrently
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {executor.submit(process_policy, policy): policy for policy in policies}
-        
-        for future in as_completed(futures):
-            policy = futures[future]
-            try:
-                result = future.result()
-                if result:
-                    policies_with_target_actions.append(result)
-            except Exception as e:
-                print(f"Error processing policy {policy['PolicyName']}: {str(e)}")
 
-    # Output the policies with target actions and associated users
-    if policies_with_target_actions:
-        print("Customer-managed policies containing target actions and associated users:")
-        for policy in policies_with_target_actions:
-            print(f"Policy Name: {policy['PolicyName']}")
-            print(f"Policy ARN: {policy['PolicyArn']}")
-            
-            # Find users with this managed policy attached
-            users = get_users_with_policy(policy['PolicyArn'])
-            if users:
-                print(f"Users with this policy: {', '.join(users)}")
+    # Output the users with policies containing target actions
+    if user_policies_map:
+        print("Users with customer-managed policies containing target actions:")
+        for user, info in user_policies_map.items():
+            print(f"User: {user}")
+            print(f"Number of Policies: {len(info['policies'])}")
+            print(f"Policy Names: {', '.join(info['policies'])}")
+            print(f"Groups: {', '.join(info['groups']) if info['groups'] else 'None'}")
             print("-" * 60)
     else:
-        print("No customer-managed policies found with target actions.")
-
-def process_policy(policy):
-    """Process each policy to check for target actions."""
-    policy_arn = policy['Arn']
-    default_version_id = policy['DefaultVersionId']
-    policy_document = get_policy_version(policy_arn, default_version_id)
-
-    # Check for target actions
-    if contains_target_actions(policy_document):
-        return {
-            'PolicyName': policy['PolicyName'],
-            'PolicyArn': policy_arn
-        }
-    return None
+        print("No users found with customer-managed policies containing target actions.")
 
 if __name__ == "__main__":
     # Output customer-managed IAM policies with target actions and associated users
