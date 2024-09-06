@@ -1,6 +1,6 @@
-# IamPolicyFixer
+# AwsIamPolicyManager
 
-**IamPolicyFixer** is a Python-based tool that automates the identification and fixing of AWS Identity and Access Management (IAM) policies containing unsupported condition keys. It also audits AWS CloudTrail logs across all regions to find events using these unsupported keys.
+**AwsIamPolicyManager** is a Python-based tool that automates the identification and fixing of AWS Identity and Access Management (IAM) policies containing unsupported condition keys. It also audits AWS CloudTrail logs across all regions to find events using these unsupported keys.
 
 ## Features
 
