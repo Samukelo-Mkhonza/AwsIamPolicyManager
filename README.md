@@ -12,7 +12,7 @@ The AWS IAM Policy Manager is a set of Python scripts designed to help AWS admin
 
 3. **AWS Job Function-Managed IAM Policies Script (`check_managed_job_function_policies.py`)**: This script retrieves all AWS-managed job function IAM policies, filters for those containing specific actions, removes unsupported condition keys, corrects supported condition keys, and lists the users and groups associated with those policies.
 
-4. **Combined IAM Policies Script (`modify_iam_polies.py`)**: This comprehensive script combines all the functionality above to process and manage all IAM policies (customer-managed, AWS-managed, and AWS job function-managed) in your AWS account, remove unsupported condition keys, correct supported condition keys, audit CloudTrail logs for related events, and list users and groups associated with those policies.
+4. **Combined IAM Policies Script (`check_all_policies.py`)**: This comprehensive script combines all the functionality above to process and manage all IAM policies (customer-managed, AWS-managed, and AWS job function-managed) in your AWS account, remove unsupported condition keys, correct supported condition keys, audit CloudTrail logs for related events, and list users and groups associated with those policies.
 
 ### Prerequisites
 
@@ -84,7 +84,7 @@ The AWS IAM Policy Manager is a set of Python scripts designed to help AWS admin
     To run a comprehensive check on all IAM policies (customer-managed, AWS-managed, and AWS job function-managed), remove unsupported condition keys, correct supported keys, and audit CloudTrail logs:
 
     ```bash
-    python modify_iam_policies.py
+    python check_all_policies.py
     ```
 
     - **Description**: This script performs all the tasks mentioned above for all IAM policies in your AWS account and provides a comprehensive summary.
