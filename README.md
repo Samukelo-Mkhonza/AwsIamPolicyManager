@@ -25,8 +25,8 @@ The AWS IAM Policy Manager is a set of Python scripts designed to help AWS admin
 1. **Clone the Repository:**
 
     ```bash
-    git clone https://github.com/yourusername/aws-iam-policy-manager.git
-    cd aws-iam-policy-manager
+    git clone https://github.com/Samukelo-Mkhonza/AwsIamPolicyManager.git
+    cd AwsIamPolicyManager
     ```
 
 2. **Install Python Dependencies:**
