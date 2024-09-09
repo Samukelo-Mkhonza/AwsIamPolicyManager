@@ -117,10 +117,6 @@ For each user associated with a policy that contains unsupported keys:
 - Always test the scripts in a safe, non-production environment to ensure they behave as expected.
 - Backup your IAM policies or their versions before running the scripts to avoid accidental loss of important policy configurations.
 
-### License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for more details.
-
 ### Contributing
 
 Contributions are welcome! Please fork the repository and submit a pull request for any improvements.
