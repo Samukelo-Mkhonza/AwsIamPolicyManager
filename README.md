@@ -107,9 +107,6 @@ For each user associated with a policy that contains unsupported keys:
 - **Adjust AWS Region and Other Settings:**
   - The scripts currently target the `us-east-1` region. You can modify the region by changing the `region_name` parameter when initializing the `boto3` client in each script.
 
-- **Dry Run Option:**
-  - Consider adding a "dry run" option to test the scripts without making actual changes to your policies. This can help you understand what changes would be made.
-
 ### Notes
 
 - Ensure that your AWS user has the necessary IAM permissions to execute the operations required by these scripts.
