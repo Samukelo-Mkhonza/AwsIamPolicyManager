@@ -1,12 +1,9 @@
 import boto3
 import json
-from datetime import datetime, timedelta
+import csv
+from io import StringIO
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
-
-# Initialize IAM and CloudTrail clients for the specific region (us-east-1)
-region_name = 'us-east-1'
-iam_client = boto3.client('iam', region_name=region_name)
-cloudtrail_client = boto3.client('cloudtrail', region_name=region_name)
 
 # Actions to search for in policies
 target_actions = ["ec2:CreateVolume", "ec2:CopySnapshot"]
@@ -18,19 +15,36 @@ unsupported_condition_keys = [
     "ec2:SnapshotTime"
 ]
 
-def get_all_customer_managed_policies():
+def get_all_regions():
+    """Retrieve a list of all AWS regions."""
+    ec2 = boto3.client('ec2')
+    response = ec2.describe_regions()
+    return [region['RegionName'] for region in response['Regions']]
+
+def get_iam_client(region_name):
+    """Initialize IAM client for a specific region."""
+    return boto3.client('iam', region_name=region_name)
+
+def get_cloudtrail_client(region_name):
+    """Initialize CloudTrail client for a specific region."""
+    return boto3.client('cloudtrail', region_name=region_name)
+
+def get_s3_client():
+    """Initialize S3 client."""
+    return boto3.client('s3')
+
+def get_all_customer_managed_policies(iam_client):
     """Retrieve all customer-managed IAM policies in the AWS account, filtering for relevant policies."""
-    print("\033[92mLoading customer-managed IAM policies...\033[0m")  
+    print("\033[92mLoading customer-managed IAM policies...\033[0m")
     paginator = iam_client.get_paginator('list_policies')
     policy_iterator = paginator.paginate(Scope='Local')
     policies = []
 
     for page in policy_iterator:
         for policy in page['Policies']:
-            # Only include policies that are relevant to the target actions
             policy_arn = policy['Arn']
             default_version_id = policy['DefaultVersionId']
-            policy_document = get_policy_version(policy_arn, default_version_id)
+            policy_document = get_policy_version(iam_client, policy_arn, default_version_id)
             if contains_target_actions(policy_document):
                 policies.append(policy)
                 print(f"Found relevant policy: {policy['PolicyName']}")
@@ -46,26 +60,44 @@ def normalize_actions(actions):
     elif isinstance(actions, list):
         return actions
     else:
-        return [] 
+        return []
 
 def contains_target_actions(policy_document):
-    """Check if the policy document contains the target actions (ec2:CreateVolume, ec2:CopySnapshot)."""
+    """Check if the policy document contains the target actions and unsupported condition keys."""
+    unsupported_conditions_found = []
+
     for statement in policy_document.get('Statement', []):
         if isinstance(statement, dict):
             actions = statement.get('Action', [])
             actions = normalize_actions(actions)
 
-            # Handle wildcard actions (*)
             if '*' in actions:
                 print("Policy contains a wildcard action (*) which includes all actions.")
                 return True
 
-            # Check if any of the target actions are in the policy's actions
             if any(action in target_actions for action in actions):
+                print(f"Found target action(s) in policy statement: {actions}")
+                
+                condition = statement.get('Condition', {})
+                if check_unsupported_conditions(condition, unsupported_conditions_found):
+                    print(f"Found unsupported condition key(s) in policy statement: {unsupported_conditions_found}")
+                    return True
+
+    return False
+
+def check_unsupported_conditions(condition, unsupported_conditions_found):
+    """Check if any unsupported condition keys are present in the policy statement's 'Condition'."""
+    if not condition:
+        return False
+
+    for condition_key, condition_value in condition.items():
+        for key in condition_value.keys():
+            if key in unsupported_condition_keys:
+                unsupported_conditions_found.append(key)
                 return True
     return False
 
-def get_policy_version(policy_arn, version_id):
+def get_policy_version(iam_client, policy_arn, version_id):
     """Retrieve the policy document for a specific version of an IAM policy."""
     response = iam_client.get_policy_version(
         PolicyArn=policy_arn,
@@ -73,36 +105,48 @@ def get_policy_version(policy_arn, version_id):
     )
     return response['PolicyVersion']['Document']
 
-def query_cloudtrail_logs():
+def query_cloudtrail_logs(cloudtrail_client):
     """Query CloudTrail logs for unsupported condition keys in specific API calls."""
-    print("\033[92mSearching CloudTrail logs for unsupported condition keys...\033[0m")  
+    print("\033[92mSearching CloudTrail logs for unsupported condition keys...\033[0m")
+    unsupported_events = []
     try:
-        # Lookup events for CreateVolume and CopySnapshot actions
+        end_time = datetime.now(timezone.utc)
+        start_time = end_time - timedelta(days=366)
+        
         response = cloudtrail_client.lookup_events(
             LookupAttributes=[
                 {'AttributeKey': 'EventName', 'AttributeValue': 'CreateVolume'},
                 {'AttributeKey': 'EventName', 'AttributeValue': 'CopySnapshot'}
             ],
+            StartTime=start_time,
+            EndTime=end_time,
             MaxResults=1000
         )
         
         events = response['Events']
-        unsupported_events = []
+
+        if not events:
+            print("No events found in CloudTrail for the given timeframe and event names.")
         
         for event in events:
             event_details = json.loads(event['CloudTrailEvent'])
             request_parameters = event_details.get('requestParameters', {})
-            
-            # Check for unsupported condition keys in the request parameters
+            event_name = event['EventName']
+            error_code = event_details.get('errorCode', None)
+            error_message = event_details.get('errorMessage', None)
+
+            print(f"Debug: Request Parameters from {event_name} API Call for Event ID {event['EventId']}:\n{json.dumps(request_parameters, indent=4)}")
+            if error_code:
+                print(f"Error Code: {error_code}, Error Message: {error_message}")
+            else:
+                print("Request was successful.")
+            print("-" * 60)
+
+            found_keys = False
             for key in unsupported_condition_keys:
-                if key in request_parameters:
-                    # Check if the event succeeded or failed
-                    if 'errorCode' in event_details:
-                        status = 'Failed'
-                        error_message = event_details['errorCode']
-                    else:
-                        status = 'Succeeded'
-                        error_message = 'None'
+                if search_key_in_dict(request_parameters, key):
+                    found_keys = True
+                    status = 'Succeeded' if not error_code else 'Failed'
                     
                     unsupported_events.append({
                         'EventId': event['EventId'],
@@ -113,28 +157,48 @@ def query_cloudtrail_logs():
                         'Status': status,
                         'ErrorMessage': error_message
                     })
-
-        # Output the CloudTrail events with unsupported condition keys
-        if unsupported_events:
-            print("CloudTrail events with unsupported condition keys found:")
-            for event in unsupported_events:
-                print(f"Event ID: {event['EventId']}")
-                print(f"Event Name: {event['EventName']}")
-                print(f"User: {event['User']}")
-                print(f"Unsupported Condition: {event['UnsupportedCondition']}")
-                print(f"Event Time: {event['EventTime']}")
-                print(f"Status: {event['Status']}")
-                print(f"Error Message: {event['ErrorMessage']}")
-                print("-" * 60)
-        else:
-            print("No CloudTrail events with unsupported condition keys found.")
-            print("-" * 60)
+            
+            if not found_keys:
+                print(f"No unsupported condition keys found in requestParameters for event ID {event['EventId']}.")
 
     except Exception as e:
         print(f"Error querying CloudTrail logs: {str(e)}")
         print("-" * 60)
 
-def get_users_with_policies(policies):
+    return unsupported_events
+
+def search_key_in_dict(d, key):
+    """Recursively search for a key in a dictionary."""
+    if key in d:
+        return True
+    for k, v in d.items():
+        if isinstance(v, dict):
+            if search_key_in_dict(v, key):
+                return True
+    return False
+
+def save_results_to_s3_csv(results, s3_bucket_name):
+    """Save the consolidated results to an S3 bucket as a CSV file."""
+    s3_client = get_s3_client()
+    try:
+        csv_buffer = StringIO()
+        csv_writer = csv.DictWriter(csv_buffer, fieldnames=['EventId', 'EventName', 'User', 'UnsupportedCondition', 'EventTime', 'Status', 'ErrorMessage'])
+        csv_writer.writeheader()
+        csv_writer.writerows(results)
+        
+        s3_file_path = f'cloudtrail-results/consolidated_results_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+        
+        s3_client.put_object(
+            Bucket=s3_bucket_name,
+            Key=s3_file_path,
+            Body=csv_buffer.getvalue(),
+            ContentType='text/csv'
+        )
+        print(f"Results successfully saved to S3: s3://{s3_bucket_name}/{s3_file_path}")
+    except Exception as e:
+        print(f"Error saving results to S3: {str(e)}")
+
+def get_users_with_policies(iam_client, policies):
     """Retrieve all users who have any of the specific policies attached, along with their groups."""
     user_policies_map = defaultdict(lambda: {'policies': [], 'groups': []})
 
@@ -145,8 +209,7 @@ def get_users_with_policies(policies):
             users = [user['UserName'] for user in response['PolicyUsers']]
             for user in users:
                 user_policies_map[user]['policies'].append(policy['PolicyName'])
-                # Get groups for each user
-                groups = get_groups_for_user(user)
+                groups = get_groups_for_user(iam_client, user)
                 user_policies_map[user]['groups'] = groups
         except Exception as e:
             print(f"Error retrieving users for policy {policy_arn}: {str(e)}")
@@ -154,7 +217,7 @@ def get_users_with_policies(policies):
 
     return user_policies_map
 
-def get_groups_for_user(user_name):
+def get_groups_for_user(iam_client, user_name):
     """Retrieve groups for a specific user."""
     groups = []
     try:
@@ -167,9 +230,8 @@ def get_groups_for_user(user_name):
 
 def output_users_with_policies(user_policies_map):
     """Display users with policies containing unsupported keys and their groups."""
-    print("\033[92mProcessing customer-managed policies to find users...\033[0m")  
+    print("\033[92mProcessing customer-managed policies to find users...\033[0m")
 
-    # Output the users with policies containing target actions
     if user_policies_map:
         print("Users with customer-managed policies containing target actions:")
         for user, info in user_policies_map.items():
@@ -182,17 +244,40 @@ def output_users_with_policies(user_policies_map):
         print("No users found with customer-managed policies containing target actions.")
         print("-" * 60)
 
-if __name__ == "__main__":
-    # Output customer-managed IAM policies with target actions
-    print("\033[92mStarting search for customer-managed IAM policies with target actions...\033[0m")  
-    policies = get_all_customer_managed_policies()
-    
-    # Search CloudTrail logs for events with unsupported condition keys
-    query_cloudtrail_logs()
+def process_region(region):
+    """Run the script logic for a single AWS region and return the results."""
+    print(f"\033[94mRunning in region: {region}\033[0m")
+    iam_client = get_iam_client(region)
+    cloudtrail_client = get_cloudtrail_client(region)
 
-    # Output users with policies containing unsupported keys
-    user_policies_map = get_users_with_policies(policies)
-    output_users_with_policies(user_policies_map)
+    print("\033[92mStarting search for customer-managed IAM policies with target actions...\033[0m")
+    policies = get_all_customer_managed_policies(iam_client)
     
-    print("\033[92mSearch completed!\033[0m")  
+    unsupported_events = query_cloudtrail_logs(cloudtrail_client)
+
+    user_policies_map = get_users_with_policies(iam_client, policies)
+    output_users_with_policies(user_policies_map)
+
+    print(f"\033[92mSearch completed in region: {region}!\033[0m")
     print("-" * 60)
+
+    return unsupported_events
+
+def run_in_all_regions(s3_bucket_name):
+    """Run the script logic in all AWS regions sequentially and save results to a single CSV file."""
+    regions = get_all_regions()
+    consolidated_results = []
+
+    for region in regions:
+        try:
+            region_results = process_region(region)
+            consolidated_results.extend(region_results)
+        except Exception as e:
+            print(f"Error in region {region}: {str(e)}")
+
+    # Save consolidated results to a single CSV file in S3
+    save_results_to_s3_csv(consolidated_results, s3_bucket_name)
+
+if __name__ == "__main__":
+    s3_bucket_name = input("Enter the S3 bucket name where results should be saved: ")
+    run_in_all_regions(s3_bucket_name)
