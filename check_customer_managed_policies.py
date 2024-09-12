@@ -111,7 +111,7 @@ def query_cloudtrail_logs(cloudtrail_client):
     unsupported_events = []
     try:
         end_time = datetime.now(timezone.utc)
-        start_time = end_time - timedelta(days=366)
+        start_time = end_time - timedelta(days=90)
         
         response = cloudtrail_client.lookup_events(
             LookupAttributes=[
@@ -263,8 +263,8 @@ def process_region(region):
 
     return unsupported_events
 
-def run_in_all_regions(s3_bucket_name):
-    """Run the script logic in all AWS regions sequentially and save results to a single CSV file."""
+def run_in_all_regions(save_to_s3, s3_bucket_name):
+    """Run the script logic in all AWS regions sequentially and save results to a single CSV file if required."""
     regions = get_all_regions()
     consolidated_results = []
 
@@ -275,9 +275,39 @@ def run_in_all_regions(s3_bucket_name):
         except Exception as e:
             print(f"Error in region {region}: {str(e)}")
 
-    # Save consolidated results to a single CSV file in S3
-    save_results_to_s3_csv(consolidated_results, s3_bucket_name)
+    # Save consolidated results to a single CSV file in S3 if requested
+    if save_to_s3:
+        save_results_to_s3_csv(consolidated_results, s3_bucket_name)
+
+def run_in_specific_region(region, save_to_s3, s3_bucket_name):
+    """Run the script logic in a specific AWS region and save results to a single CSV file if required."""
+    consolidated_results = []
+    try:
+        region_results = process_region(region)
+        consolidated_results.extend(region_results)
+    except Exception as e:
+        print(f"Error in region {region}: {str(e)}")
+
+    # Save consolidated results to a single CSV file in S3 if requested
+    if save_to_s3:
+        save_results_to_s3_csv(consolidated_results, s3_bucket_name)
 
 if __name__ == "__main__":
-    s3_bucket_name = input("Enter the S3 bucket name where results should be saved: ")
-    run_in_all_regions(s3_bucket_name)
+    # Prompt user whether to search in all regions or a specific region
+    search_choice = input("Do you want to search in all regions or a specific region? (all/specific): ").strip().lower()
+    if search_choice == 'specific':
+        region = input("Enter the AWS region to search in (e.g., us-east-1): ").strip()
+    else:
+        region = None
+
+    # Ask user if they want to save results to S3
+    save_to_s3 = input("Do you want to save the results to S3? (yes/no): ").strip().lower() == 'yes'
+    s3_bucket_name = None
+    if save_to_s3:
+        s3_bucket_name = input("Enter the S3 bucket name where results should be saved: ").strip()
+
+    # Execute based on user's choice
+    if region:
+        run_in_specific_region(region, save_to_s3, s3_bucket_name)
+    else:
+        run_in_all_regions(save_to_s3, s3_bucket_name)
